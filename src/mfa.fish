@@ -1,76 +1,63 @@
-#!/user/bin/env fish
+#!/usr/bin/env fish
 
 # you MUST source this file to get the exports in your shell!
-if test "$_" = source && set -q FISH_VERSION
-    set SOURCED true
+if test "$_" = source || test -n "$IS_SOURCED"
+    set SOURCED 1
 else
-    set SOURCED false
+    set SOURCED 0
 end
 
-set REQUIRED python3 aws jq
+set -l REQUIREMENTS python3 aws jq
 
-for program in $REQUIRED
-    if not command -v $program &>1
-        echo "$program could not be found!"
-        if $SOURCED
-            exit 0
-        end
-    end
-end
-
-set PYCODE (cat aws_cli_mfa.py | string collect)
-
-set RESPONSE (set COLUMNS 999 /usr/bin/env python3 -c "$PYCODE" $argv)
-
-if string match "usage*" $RESPONSE
-    echo -E "$RESPONSE"
-    if $SOURCED
+for requirement in $REQUIREMENTS
+    if not command -v $requirement > /dev/null 2>&1
+        echo "$requirement could not be found!"
         exit 0
     end
 end
 
-if ! echo -E $RESPONSE | jq -e . &> /dev/null
-    echo "JSON parsing failed:"
-    echo -E $RESPONSE
-    if $SOURCED
-        exit 1
-    end
-end
+set -l PYCODE "
+#INSERT_PYTHON_CODE_HERE
+"
 
-set STS_CMD = (echo -E $RESPONSE | jq -r .sts_cmd)
-set OUTPUT = (echo -E $RESPONSE | jq -r .output)
+set -l RESPONSE (/usr/bin/env python3 -c "$PYCODE" $argv)
 
-if not test -z $STS_CMD
-    echo $STS_CMD
-end
-
-if not test -z $OUTPUT; and test $OUTPUT != "null"
-    echo $OUTPUT
-end
-
-if test (echo -E $RESPONSE | jq -r '.envvars') = "null"; and $SOURCED
+if string match -r "^usage" "$RESPONSE" > /dev/null 2>&1
+    echo -E "$RESPONSE"
     exit 0
 end
 
-set KEYS (echo -E $RESPONSE | jq -r '.envvars | keys[]')
+if not echo -E "$RESPONSE" | jq -e . > /dev/null 2>&1
+    echo "JSON parsing failed:"
+    echo -E "$RESPONSE"
+    exit 1
+end
 
-if test (count $KEYS) -ge 0; and not $SOURCED
+set -l STS_CMD (echo -E "$RESPONSE" | jq -r ".sts_cmd // null") 
+set -l OUTPUT (echo -E "$RESPONSE" | jq -r ".output // null" | string collect)
+
+if not test "null" = "$STS_CMD"
+    echo "$STS_CMD"
+end
+
+if not test "null" = "$OUTPUT"
+    echo "$OUTPUT"
+end
+
+set -l ENVVARS (echo -E "$RESPONSE" | jq -r ".envvars // null")
+
+if test "null" = "$ENVVARS"
+    exit 0
+end
+
+set -l KEYS (echo -E "$RESPONSE" | jq -r ".envvars | keys[]")
+if test (count $KEYS) -ge 0 -a $SOURCED -ne 1
     echo "You must source this file to get the exports in your shell"
     exit 1
 end
 
 for key in $KEYS
-    value = (echo -E $RESPONSE | jq -r ".envvars.$key")
-    set -gX $key $value
+    set value (echo -E "$RESPONSE" | jq -r ".envvars.$key")
+    set -x $key $value
     echo "Set env var: $key"
 end
-
-# [[ ${#KEYS[@]} -ge 0 ]] && [[ $SOURCED -ne 1 ]] &&
-#     echo "You must source this file to get the exports in your shell" &&
-#     exit 1
-
-# for key in "${KEYS[@]}" ; do
-#     value=$(echo -E "$RESPONSE" | jq -r ".envvars.$key")
-#     export $key=$value
-#     echo "Set env var: $key"
-# done
